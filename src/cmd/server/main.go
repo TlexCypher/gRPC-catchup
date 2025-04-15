@@ -2,11 +2,14 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"io"
 	"log"
 	"net"
 	"os"
 	"os/signal"
+	"time"
 
 	hellopb "mygrpc/pkg/grpc"
 
@@ -22,6 +25,58 @@ func (s *myServer) Hello(ctx context.Context, req *hellopb.HelloRequest) (*hello
 	return &hellopb.HelloResponse{
 		Message: fmt.Sprintf("Hello, %s!", req.GetName()),
 	}, nil
+}
+func (s *myServer) HelloServerStream(req *hellopb.HelloRequest, srv grpc.ServerStreamingServer[hellopb.HelloResponse]) error {
+	resCount := 5
+	for i := range resCount {
+		if err := srv.Send(&hellopb.HelloResponse{
+			Message: fmt.Sprintf("[%d] Hello, %s!", i, req.GetName()),
+		}); err != nil {
+			return err
+		}
+		time.Sleep(time.Second * 1)
+	}
+	return nil
+}
+
+func (s *myServer) HelloClientStream(stream grpc.ClientStreamingServer[hellopb.HelloRequest, hellopb.HelloResponse]) error {
+	nameList := make([]string, 0, 10)
+	for {
+		req, err := stream.Recv()
+		if errors.Is(err, io.EOF) {
+			message := fmt.Sprintf("Hello, %v!", nameList)
+			return stream.SendAndClose(&hellopb.HelloResponse{
+				Message: message,
+			})
+		}
+		if err != nil {
+			return err
+		}
+		nameList = append(nameList, req.GetName())
+	}
+}
+
+/*
+1つリクエストを受け取るたびに、1つリクエストを返す前提でかく
+streamを貼っている最中に、全ての関数は一度だけしか呼ばれない
+*/
+func (s *myServer) HelloBiStreams(stream grpc.BidiStreamingServer[hellopb.HelloRequest, hellopb.HelloResponse]) error {
+	for {
+		req, err := stream.Recv()
+		if errors.Is(err, io.EOF) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		fmt.Printf("BiStream: %v\n", req.GetName())
+		message := fmt.Sprintf("Hello, %v!", req.GetName())
+		if err := stream.Send(&hellopb.HelloResponse{
+			Message: message,
+		}); err != nil {
+			return err
+		}
+	}
 }
 
 func NewMyServer() *myServer {
